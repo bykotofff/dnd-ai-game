@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: dnd_ai_game
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis для кэширования
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Ollama для локального ИИ
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    restart: unless-stopped
+
+  # Stable Diffusion для генерации изображений (опционально)
+  stable-diffusion:
+    image: continuumio/miniconda3
+    ports:
+      - "7860:7860"
+    volumes:
+      - sd_data:/app
+    working_dir: /app
+    command: >
+      bash -c "
+        if [ ! -f /app/setup_done ]; then
+          conda install -y python=3.10 &&
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu &&
+          pip install diffusers transformers accelerate &&
+          touch /app/setup_done
+        fi &&
+        python -c \"
+        from diffusers import StableDiffusionPipeline
+        import torch
+        from flask import Flask, request, jsonify
+        import base64
+        from io import BytesIO
+      
+        app = Flask(__name__)
+        pipe = StableDiffusionPipeline.from_pretrained('runwayml/stable-diffusion-v1-5', torch_dtype=torch.float32)
+      
+        @app.route('/generate', methods=['POST'])
+        def generate():
+            data = request.json
+            prompt = data.get('prompt', '')
+            image = pipe(prompt).images[0]
+      
+            buffer = BytesIO()
+            image.save(buffer, format='PNG')
+            img_str = base64.b64encode(buffer.getvalue()).decode()
+      
+            return jsonify({'image': img_str})
+      
+        app.run(host='0.0.0.0', port=7860)
+        \"
+      "
+    restart: unless-stopped
+    profiles: ["images"] # Запускается только с профилем --profile images
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  sd_data:

@@ -1,0 +1,238 @@
+// backend/prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Пользователи
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  username  String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  characters Character[]
+  gameSessions GameSessionPlayer[]
+
+  @@map("users")
+}
+
+// Персонажи
+model Character {
+  id           String  @id @default(cuid())
+  userId       String
+  name         String
+  race         String
+  class        String
+  level        Int     @default(1)
+  experience   Int     @default(0)
+
+  // Характеристики D&D 5e
+  strength     Int     @default(10)
+  dexterity    Int     @default(10)
+  constitution Int     @default(10)
+  intelligence Int     @default(10)
+  wisdom       Int     @default(10)
+  charisma     Int     @default(10)
+
+  // Здоровье
+  currentHP    Int
+  maxHP        Int
+  temporaryHP  Int     @default(0)
+
+  // Дополнительные характеристики
+  armorClass   Int     @default(10)
+  initiative   Int     @default(0)
+  speed        Int     @default(30)
+
+  // Текстовые поля
+  backstory    String
+  motivation   String
+  alignment    String
+
+  // JSON поля для сложных данных
+  skills         Json    // Навыки и владения
+  equipment      Json    // Инвентарь
+  spells         Json?   // Заклинания (если есть)
+  features       Json    // Способности класса/расы
+  personalityTraits Json // Черты характера
+
+  // Изображения
+  profileImage String?
+
+  // Связи
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSessions GameSessionPlayer[]
+  actionLogs   ActionLog[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("characters")
+}
+
+// Игровые сессии
+model GameSession {
+  id           String    @id @default(cuid())
+  name         String
+  description  String?
+  maxPlayers   Int       @default(6)
+  isActive     Boolean   @default(true)
+
+  // Состояние игры
+  currentScene String
+  worldState   Json      // Состояние мира
+  gameSettings Json      // Настройки игры
+
+  // Изображения
+  mapImage     String?
+  sceneImage   String?
+
+  // Связи
+  players      GameSessionPlayer[]
+  quests       Quest[]
+  npcs         NPC[]
+  locations    Location[]
+  actionLogs   ActionLog[]
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("game_sessions")
+}
+
+// Связь игроков и сессий
+model GameSessionPlayer {
+  id          String      @id @default(cuid())
+  sessionId   String
+  characterId String
+  isGameMaster Boolean    @default(false)
+  joinedAt    DateTime    @default(now())
+
+  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  character   Character   @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, characterId])
+  @@map("game_session_players")
+}
+
+// Квесты
+model Quest {
+  id          String      @id @default(cuid())
+  sessionId   String
+  title       String
+  description String
+  type        QuestType
+  status      QuestStatus @default(ACTIVE)
+  priority    Int         @default(1)
+
+  // Цели и награды
+  objectives  Json        // Массив целей
+  rewards     Json        // Награды
+
+  // Связанные данные
+  relatedNPCs Json?       // ID связанных NPC
+  location    String?     // Связанная локация
+
+  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("quests")
+}
+
+// NPC
+model NPC {
+  id          String    @id @default(cuid())
+  sessionId   String
+  name        String
+  description String
+  personality String
+
+  // Игровые характеристики
+  stats       Json      // Характеристики (если нужны для боя)
+  alignment   String?
+  occupation  String?
+
+  // Диалоги и квесты
+  dialogueTree Json?    // Дерево диалогов
+  questGiver   Boolean  @default(false)
+
+  // Изображение
+  image       String?
+
+  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("npcs")
+}
+
+// Локации
+model Location {
+  id          String    @id @default(cuid())
+  sessionId   String
+  name        String
+  description String
+  type        String    // city, dungeon, wilderness, etc.
+
+  // Связанные данные
+  connections Json      // Связи с другими локациями
+  npcs        Json      // ID NPC в локации
+  encounters  Json      // Возможные случайные встречи
+
+  // Изображения
+  mapImage    String?
+  sceneImage  String?
+
+  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("locations")
+}
+
+// Журнал действий
+model ActionLog {
+  id          String    @id @default(cuid())
+  sessionId   String
+  characterId String?
+
+  // Содержимое действия
+  actionType  String    // player_action, ai_response, dice_roll, etc.
+  content     String
+  metadata    Json?     // Дополнительные данные
+
+  // Броски костей
+  diceRolls   Json?     // Результаты бросков
+
+  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  character   Character?  @relation(fields: [characterId], references: [id], onDelete: SetNull)
+
+  timestamp   DateTime  @default(now())
+
+  @@map("action_logs")
+}
+
+// Энумы
+enum QuestType {
+  MAIN
+  SIDE
+  PERSONAL
+}
+
+enum QuestStatus {
+  ACTIVE
+  COMPLETED
+  FAILED
+  PAUSED
+}
