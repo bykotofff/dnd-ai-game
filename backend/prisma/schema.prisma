@@ -1,4 +1,3 @@
-// backend/prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,229 +9,166 @@ datasource db {
 
 // Пользователи
 model User {
-  id        String    @id @default(cuid())
-  email     String    @unique
-  username  String    @unique
+  id        String   @id @default(cuid())
+  email     String   @unique
+  username  String   @unique
   password  String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  characters Character[]
-  gameSessions GameSessionPlayer[]
+  // Связи
+  characters     Character[]
+  sessionPlayers GameSessionPlayer[]
+  masterSessions GameSession[]       @relation("GameMaster")
+  actionLogs     ActionLog[]
+  createdInvites SessionInvite[]     @relation("InviteCreator")
 
   @@map("users")
 }
 
 // Персонажи
 model Character {
-  id           String  @id @default(cuid())
-  userId       String
-  name         String
-  race         String
-  class        String
-  level        Int     @default(1)
-  experience   Int     @default(0)
+  id         String @id @default(cuid())
+  userId     String
+  name       String
+  race       String
+  class      String
+  level      Int    @default(1)
+  experience Int    @default(0)
 
   // Характеристики D&D 5e
-  strength     Int     @default(10)
-  dexterity    Int     @default(10)
-  constitution Int     @default(10)
-  intelligence Int     @default(10)
-  wisdom       Int     @default(10)
-  charisma     Int     @default(10)
+  strength     Int @default(10)
+  dexterity    Int @default(10)
+  constitution Int @default(10)
+  intelligence Int @default(10)
+  wisdom       Int @default(10)
+  charisma     Int @default(10)
 
   // Здоровье
-  currentHP    Int
-  maxHP        Int
-  temporaryHP  Int     @default(0)
+  currentHP   Int
+  maxHP       Int
+  temporaryHP Int @default(0)
 
   // Дополнительные характеристики
-  armorClass   Int     @default(10)
-  initiative   Int     @default(0)
-  speed        Int     @default(30)
+  armorClass Int @default(10)
+  initiative Int @default(0)
+  speed      Int @default(30)
 
   // Текстовые поля
-  backstory    String
-  motivation   String
-  alignment    String
+  backstory  String
+  motivation String
+  alignment  String
 
   // JSON поля для сложных данных
-  skills         Json    // Навыки и владения
-  equipment      Json    // Инвентарь
-  spells         Json?   // Заклинания (если есть)
-  features       Json    // Способности класса/расы
+  skills            Json // Навыки и владения
+  equipment         Json // Инвентарь
+  spells            Json? // Заклинания (если есть)
+  features          Json // Способности класса/расы
   personalityTraits Json // Черты характера
 
   // Изображения
   profileImage String?
 
   // Связи
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  gameSessions GameSessionPlayer[]
-  actionLogs   ActionLog[]
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionPlayers GameSessionPlayer[]
+  actionLogs     ActionLog[]
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("characters")
 }
 
 // Игровые сессии
 model GameSession {
-  id           String    @id @default(cuid())
-  name         String
-  description  String?
-  maxPlayers   Int       @default(6)
-  isActive     Boolean   @default(true)
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  maxPlayers  Int     @default(6)
+  isActive    Boolean @default(true)
+  isPublic    Boolean @default(false)
 
   // Состояние игры
   currentScene String
-  worldState   Json      // Состояние мира
-  gameSettings Json      // Настройки игры
+  worldState   Json // Состояние мира
+  gameSettings Json // Настройки игры
 
   // Изображения
-  mapImage     String?
-  sceneImage   String?
+  mapImage   String?
+  sceneImage String?
+
+  // Мастер игры
+  gameMasterId String
 
   // Связи
-  players      GameSessionPlayer[]
-  quests       Quest[]
-  npcs         NPC[]
-  locations    Location[]
-  actionLogs   ActionLog[]
+  gameMaster User                @relation("GameMaster", fields: [gameMasterId], references: [id])
+  players    GameSessionPlayer[]
+  actionLogs ActionLog[]
+  invites    SessionInvite[]
 
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("game_sessions")
 }
 
-// Связь игроков и сессий
+// Участники игровых сессий
 model GameSessionPlayer {
-  id          String      @id @default(cuid())
-  sessionId   String
-  characterId String
-  isGameMaster Boolean    @default(false)
-  joinedAt    DateTime    @default(now())
+  id           String   @id @default(cuid())
+  sessionId    String
+  userId       String
+  characterId  String
+  isGameMaster Boolean  @default(false)
+  joinedAt     DateTime @default(now())
+  lastActivity DateTime @default(now())
 
-  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  character   Character   @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  // Связи
+  session   GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character Character   @relation(fields: [characterId], references: [id], onDelete: Cascade)
 
+  // Уникальность: один пользователь - один персонаж на сессию
+  @@unique([sessionId, userId])
   @@unique([sessionId, characterId])
   @@map("game_session_players")
 }
 
-// Квесты
-model Quest {
-  id          String      @id @default(cuid())
-  sessionId   String
-  title       String
-  description String
-  type        QuestType
-  status      QuestStatus @default(ACTIVE)
-  priority    Int         @default(1)
-
-  // Цели и награды
-  objectives  Json        // Массив целей
-  rewards     Json        // Награды
-
-  // Связанные данные
-  relatedNPCs Json?       // ID связанных NPC
-  location    String?     // Связанная локация
-
-  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-
-  @@map("quests")
-}
-
-// NPC
-model NPC {
-  id          String    @id @default(cuid())
-  sessionId   String
-  name        String
-  description String
-  personality String
-
-  // Игровые характеристики
-  stats       Json      // Характеристики (если нужны для боя)
-  alignment   String?
-  occupation  String?
-
-  // Диалоги и квесты
-  dialogueTree Json?    // Дерево диалогов
-  questGiver   Boolean  @default(false)
-
-  // Изображение
-  image       String?
-
-  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  @@map("npcs")
-}
-
-// Локации
-model Location {
-  id          String    @id @default(cuid())
-  sessionId   String
-  name        String
-  description String
-  type        String    // city, dungeon, wilderness, etc.
-
-  // Связанные данные
-  connections Json      // Связи с другими локациями
-  npcs        Json      // ID NPC в локации
-  encounters  Json      // Возможные случайные встречи
-
-  // Изображения
-  mapImage    String?
-  sceneImage  String?
-
-  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  @@map("locations")
-}
-
-// Журнал действий
+// Лог действий в игре
 model ActionLog {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   sessionId   String
+  userId      String?
   characterId String?
-
-  // Содержимое действия
-  actionType  String    // player_action, ai_response, dice_roll, etc.
+  actionType  String // 'player_action', 'ai_response', 'dice_roll', etc.
   content     String
-  metadata    Json?     // Дополнительные данные
+  metadata    Json? // Дополнительные данные
+  timestamp   DateTime @default(now())
 
-  // Броски костей
-  diceRolls   Json?     // Результаты бросков
-
-  session     GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  character   Character?  @relation(fields: [characterId], references: [id], onDelete: SetNull)
-
-  timestamp   DateTime  @default(now())
+  // Связи
+  session   GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  character Character?  @relation(fields: [characterId], references: [id], onDelete: SetNull)
 
   @@map("action_logs")
 }
 
-// Энумы
-enum QuestType {
-  MAIN
-  SIDE
-  PERSONAL
-}
+// Приглашения в сессии
+model SessionInvite {
+  id        String   @id @default(cuid())
+  sessionId String
+  code      String   @unique
+  createdBy String
+  expiresAt DateTime
+  maxUses   Int? // Максимальное количество использований
+  usedCount Int      @default(0)
+  isActive  Boolean  @default(true)
 
-enum QuestStatus {
-  ACTIVE
-  COMPLETED
-  FAILED
-  PAUSED
+  // Связи
+  session GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  creator User        @relation("InviteCreator", fields: [createdBy], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@map("session_invites")
 }
