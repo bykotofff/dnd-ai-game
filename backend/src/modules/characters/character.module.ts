@@ -1,7 +1,7 @@
 // backend/src/modules/characters/character.module.ts
 import { characterRouter } from './character.router'
 import { CharacterService } from './character.service'
-import { CharacterController } from './character.controller'
+import { CharacterController } from ".//backend/src/modules/characters/character.controller"
 
 /**
  * Character Module - централизованная точка доступа к функциональности персонажей

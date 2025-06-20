@@ -1,4 +1,4 @@
-// frontend/next.config.js
+// next.config.js (удалить next.config.ts и использовать этот файл)
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     experimental: {
@@ -30,6 +30,15 @@ const nextConfig = {
                 fs: false,
                 net: false,
                 tls: false,
+                dns: false,
+                crypto: false,
+                stream: false,
+                buffer: false,
+                util: false,
+                url: false,
+                querystring: false,
+                path: false,
+                os: false,
             }
         }
 
@@ -50,7 +59,7 @@ const nextConfig = {
         ignoreDuringBuilds: false,
     },
 
-    // Настройки для PWA (если нужно)
+    // Настройки безопасности
     async headers() {
         return [
             {
@@ -68,6 +77,10 @@ const nextConfig = {
                         key: 'Referrer-Policy',
                         value: 'origin-when-cross-origin',
                     },
+                    {
+                        key: 'X-XSS-Protection',
+                        value: '1; mode=block',
+                    },
                 ],
             },
         ]
@@ -83,6 +96,25 @@ const nextConfig = {
             },
         ]
     },
+
+    // Настройки для production
+    compress: true,
+    productionBrowserSourceMaps: false,
+
+    // Настройки для анализа бандла
+    ...(process.env.ANALYZE === 'true' && {
+        webpack: (config, options) => {
+            const { BundleAnalyzerPlugin } = require('@next/bundle-analyzer')({
+                enabled: process.env.ANALYZE === 'true',
+            })
+
+            if (options.isServer === false) {
+                config.plugins.push(new BundleAnalyzerPlugin())
+            }
+
+            return config
+        },
+    }),
 }
 
 module.exports = nextConfig

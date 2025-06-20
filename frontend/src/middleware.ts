@@ -2,46 +2,48 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-// Маршруты, которые требуют аутентификации
+// Публичные маршруты (доступны без авторизации)
+const publicRoutes = [
+    '/auth/login',
+    '/auth/register',
+    '/auth/forgot-password',
+    '/auth/reset-password',
+    '/_next',
+    '/api/auth/login',
+    '/api/auth/register',
+    '/favicon.ico',
+    '/robots.txt',
+    '/sitemap.xml'
+]
+
+// Маршруты авторизации (редирект если уже авторизован)
+const authRoutes = [
+    '/auth/login',
+    '/auth/register',
+    '/auth/forgot-password',
+    '/auth/reset-password'
+]
+
+// Защищенные маршруты (требуют авторизации)
 const protectedRoutes = [
     '/dashboard',
-    '/game',
     '/characters',
     '/sessions',
+    '/game',
     '/profile',
     '/settings'
 ]
 
-// Маршруты, доступные только неаутентифицированным пользователям
-const authRoutes = [
-    '/auth/login',
-    '/auth/register',
-    '/auth/forgot-password'
-]
-
-// Публичные маршруты
-const publicRoutes = [
-    '/',
-    '/about',
-    '/help',
-    '/privacy',
-    '/terms',
-    '/contact'
-]
-
-function isProtectedRoute(pathname: string): boolean {
-    return protectedRoutes.some(route => pathname.startsWith(route))
+function isPublicRoute(pathname: string): boolean {
+    return publicRoutes.some(route => pathname.startsWith(route))
 }
 
 function isAuthRoute(pathname: string): boolean {
     return authRoutes.some(route => pathname.startsWith(route))
 }
 
-function isPublicRoute(pathname: string): boolean {
-    return publicRoutes.includes(pathname) ||
-        pathname.startsWith('/api') ||
-        pathname.startsWith('/_next') ||
-        pathname.includes('.')
+function isProtectedRoute(pathname: string): boolean {
+    return protectedRoutes.some(route => pathname.startsWith(route))
 }
 
 function hasValidToken(request: NextRequest): boolean {
