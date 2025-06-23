@@ -78,60 +78,55 @@ class App {
             res.status(200).json({
                 status: 'ok',
                 timestamp: new Date().toISOString(),
-                uptime: process.uptime(),
-                environment: process.env.NODE_ENV || 'development'
+                uptime: process.uptime()
             })
         })
 
-        // API роуты
-        this.app.use('/api/auth', new AuthModule().router)
-        this.app.use('/api/characters', new CharacterModule().router)
-        this.app.use('/api/sessions', new SessionModule().router)
-        this.app.use('/api/game-master', new AIMasterModule().router)
-        this.app.use('/api/dice', new DiceModule().router)
-        this.app.use('/api/quests', new QuestModule().router)
-        this.app.use('/api/images', new ImageModule().router)
+        // API роуты - используем статические router свойства
+        this.app.use('/api/auth', AuthModule.router)
+        this.app.use('/api/characters', CharacterModule.router)
+        this.app.use('/api/sessions', SessionModule.router)
+        this.app.use('/api/game-master', AIMasterModule.router)
+        this.app.use('/api/dice', DiceModule.router)
+        this.app.use('/api/quests', QuestModule.router)
+        this.app.use('/api/images', ImageModule.router)
 
         // 404 обработчик
         this.app.use('*', (req, res) => {
             res.status(404).json({
-                success: false,
-                error: 'Маршрут не найден',
+                error: 'Route not found',
                 path: req.originalUrl
             })
         })
     }
 
     private initializeSocketIO(): void {
-        this.io.on('connection', (socket) => {
-            console.log(`🔌 Клиент подключен: ${socket.id}`)
+        this.socketHandler.initialize()
 
-            // Передаем обработку в SocketHandler
-            this.socketHandler.handleConnection(socket)
+        // Обработка подключений через публичный метод
+        this.io.on('connection', (socket) => {
+            this.socketHandler.handleSocketConnection(socket)
         })
     }
 
     private initializeErrorHandling(): void {
-        // Обработчик необработанных ошибок
+        // Глобальный обработчик ошибок
         this.app.use((error: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-            console.error('🔥 Необработанная ошибка:', error)
+            console.error('Global error handler:', error)
 
             res.status(500).json({
-                success: false,
-                error: process.env.NODE_ENV === 'production'
-                    ? 'Внутренняя ошибка сервера'
-                    : error.message,
-                ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
+                error: 'Internal server error',
+                message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
             })
         })
 
-        // Обработка необработанных промисов
+        // Обработка неперехваченных исключений
         process.on('unhandledRejection', (reason, promise) => {
-            console.error('🔥 Необработанное отклонение промиса:', reason)
+            console.error('Unhandled Rejection at:', promise, 'reason:', reason)
         })
 
         process.on('uncaughtException', (error) => {
-            console.error('🔥 Необработанное исключение:', error)
+            console.error('Uncaught Exception:', error)
             process.exit(1)
         })
     }
@@ -140,46 +135,26 @@ class App {
         try {
             // Подключение к базе данных
             await this.databaseService.connect()
+            console.log('✅ Database connected successfully')
 
-            const port = process.env.PORT || 3001
+            // Инициализация ИИ модуля
+            await AIMasterModule.initialize()
 
-            this.server.listen(port, () => {
-                console.log(`🚀 Сервер запущен на порту ${port}`)
-                console.log(`📊 Режим: ${process.env.NODE_ENV || 'development'}`)
-                console.log(`🔗 Health check: http://localhost:${port}/health`)
+            // Запуск сервера
+            const PORT = process.env.PORT || 3001
+            this.server.listen(PORT, () => {
+                console.log(`🚀 Server is running on port ${PORT}`)
+                console.log(`📊 Health check available at http://localhost:${PORT}/health`)
+                console.log(`🎮 Game API available at http://localhost:${PORT}/api`)
+                console.log(`🤖 AI Master available at http://localhost:${PORT}/api/game-master`)
             })
         } catch (error) {
-            console.error('❌ Ошибка запуска сервера:', error)
+            console.error('❌ Failed to start server:', error)
             process.exit(1)
-        }
-    }
-
-    public async stop(): Promise<void> {
-        try {
-            await this.databaseService.disconnect()
-            this.server.close()
-            console.log('✅ Сервер остановлен')
-        } catch (error) {
-            console.error('❌ Ошибка остановки сервера:', error)
         }
     }
 }
 
-// Создание и запуск приложения
+// Запуск приложения
 const app = new App()
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-    console.log('📝 Получен сигнал SIGTERM, останавливаем сервер...')
-    await app.stop()
-})
-
-process.on('SIGINT', async () => {
-    console.log('📝 Получен сигнал SIGINT, останавливаем сервер...')
-    await app.stop()
-})
-
-// Запуск сервера
 app.start()
-
-export default app

@@ -45,8 +45,14 @@ export class SocketHandler {
 
     public initialize(): void {
         this.io.use(this.authenticateSocket.bind(this))
-        this.io.on('connection', this.handleConnection.bind(this))
         console.log('🔌 Socket.IO handler initialized')
+    }
+
+    /**
+     * Публичный метод для обработки подключений
+     */
+    public handleSocketConnection(socket: AuthenticatedSocket): void {
+        this.handleConnection(socket)
     }
 
     /**
@@ -77,20 +83,25 @@ export class SocketHandler {
      */
     private handleConnection(socket: AuthenticatedSocket): void {
         const userId = socket.userId!
-        console.log(`🎮 User ${socket.username} connected (${socket.id})`)
+        const username = socket.username!
 
-        // Регистрируем пользователя
-        this.registerUser(userId, socket.id)
+        console.log(`🔌 User ${username} (${userId}) connected with socket ${socket.id}`)
 
-        // Настраиваем обработчики событий
-        this.setupEventHandlers(socket)
+        // Добавляем сокет к пользователю
+        if (!this.connectedUsers.has(userId)) {
+            this.connectedUsers.set(userId, [])
+        }
+        this.connectedUsers.get(userId)!.push(socket.id)
 
-        // Уведомляем о подключении
+        // Отправляем подтверждение подключения
         socket.emit('connected', {
-            message: 'Подключение к игровому серверу установлено',
-            userId: userId,
-            socketId: socket.id
+            userId,
+            username,
+            timestamp: new Date()
         })
+
+        // Обработчики событий
+        this.setupEventHandlers(socket)
 
         // Обработка отключения
         socket.on('disconnect', () => {
@@ -105,531 +116,230 @@ export class SocketHandler {
         const userId = socket.userId!
 
         // Присоединение к игровой сессии
-        socket.on('join_session', async (data: { sessionId: string }) => {
-            await this.handleJoinSession(socket, data.sessionId)
+        socket.on('join_session', async (data: { sessionId: string, characterId?: string }) => {
+            try {
+                await this.handleJoinSession(socket, data)
+            } catch (error) {
+                socket.emit('error', {
+                    code: 'JOIN_SESSION_ERROR',
+                    message: 'Ошибка при присоединении к сессии',
+                    details: error
+                })
+            }
         })
 
         // Покидание игровой сессии
         socket.on('leave_session', async (data: { sessionId: string }) => {
-            await this.handleLeaveSession(socket, data.sessionId)
+            try {
+                await this.handleLeaveSession(socket, data)
+            } catch (error) {
+                socket.emit('error', {
+                    code: 'LEAVE_SESSION_ERROR',
+                    message: 'Ошибка при покидании сессии',
+                    details: error
+                })
+            }
         })
 
         // Игровое действие
         socket.on('game_action', async (action: GameAction) => {
-            await this.handleGameAction(socket, action)
+            try {
+                await this.handleGameAction(socket, action)
+            } catch (error) {
+                socket.emit('error', {
+                    code: 'GAME_ACTION_ERROR',
+                    message: 'Ошибка при обработке игрового действия',
+                    details: error
+                })
+            }
         })
 
-        // Бросок кубиков
-        socket.on('dice_roll', async (diceRoll: DiceRoll) => {
-            await this.handleDiceRoll(socket, diceRoll)
+        // Бросок кубика
+        socket.on('dice_roll', async (rollData: DiceRoll) => {
+            try {
+                await this.handleDiceRoll(socket, rollData)
+            } catch (error) {
+                socket.emit('error', {
+                    code: 'DICE_ROLL_ERROR',
+                    message: 'Ошибка при броске кубика',
+                    details: error
+                })
+            }
         })
 
-        // Сообщение в чат
-        socket.on('chat_message', async (data: { sessionId: string, message: string, type?: 'ic' | 'ooc' }) => {
-            await this.handleChatMessage(socket, data)
+        // Сообщение в чате
+        socket.on('chat_message', async (messageData: any) => {
+            try {
+                await this.handleChatMessage(socket, messageData)
+            } catch (error) {
+                socket.emit('error', {
+                    code: 'CHAT_MESSAGE_ERROR',
+                    message: 'Ошибка при отправке сообщения',
+                    details: error
+                })
+            }
         })
 
-        // Обновление статуса персонажа
-        socket.on('character_update', async (data: { sessionId: string, characterId: string, updates: any }) => {
-            await this.handleCharacterUpdate(socket, data)
-        })
-
-        // Запрос текущего состояния сессии
-        socket.on('get_session_state', async (data: { sessionId: string }) => {
-            await this.handleGetSessionState(socket, data.sessionId)
-        })
-
-        // Пинг для проверки соединения
+        // Ping-pong для проверки соединения
         socket.on('ping', () => {
-            socket.emit('pong', { timestamp: Date.now() })
+            socket.emit('pong', { timestamp: new Date() })
         })
     }
 
     /**
-     * Присоединение к игровой сессии
+     * Обработка присоединения к сессии
      */
-    private async handleJoinSession(socket: AuthenticatedSocket, sessionId: string): Promise<void> {
-        try {
-            const userId = socket.userId!
+    private async handleJoinSession(socket: AuthenticatedSocket, data: { sessionId: string, characterId?: string }): Promise<void> {
+        const { sessionId, characterId } = data
+        const userId = socket.userId!
 
-            // Проверяем доступ к сессии
-            const hasAccess = await this.sessionService.checkUserAccess(sessionId, userId)
-
-            if (!hasAccess) {
-                socket.emit('error', { message: 'Нет доступа к данной игровой сессии' })
-                return
-            }
-
-            // Покидаем предыдущую сессию если есть
-            if (socket.currentSessionId) {
-                await this.handleLeaveSession(socket, socket.currentSessionId)
-            }
-
-            // Присоединяемся к комнате сессии
-            await socket.join(`session_${sessionId}`)
-            socket.currentSessionId = sessionId
-
-            // Регистрируем в списке участников сессии
-            if (!this.sessionRooms.has(sessionId)) {
-                this.sessionRooms.set(sessionId, new Set())
-            }
-            this.sessionRooms.get(sessionId)!.add(userId)
-
-            // Уведомляем всех участников о присоединении
-            socket.to(`session_${sessionId}`).emit('player_joined', {
-                userId: userId,
-                username: socket.username,
-                timestamp: new Date()
-            })
-
-            // Отправляем подтверждение
-            socket.emit('session_joined', {
-                sessionId: sessionId,
-                message: 'Успешно присоединились к игровой сессии'
-            })
-
-            // Отправляем текущее состояние сессии
-            await this.sendSessionState(socket, sessionId)
-
-            console.log(`👥 User ${socket.username} joined session ${sessionId}`)
-        } catch (error) {
-            console.error('Join session error:', error)
-            socket.emit('error', { message: 'Ошибка при присоединении к сессии' })
+        // Проверяем существование сессии
+        const session = await this.sessionService.getSession(sessionId)
+        if (!session) {
+            throw new Error('Сессия не найдена')
         }
+
+        // Присоединяем к комнате
+        socket.join(`session_${sessionId}`)
+        socket.currentSessionId = sessionId
+
+        // Добавляем в список активных пользователей сессии
+        if (!this.sessionRooms.has(sessionId)) {
+            this.sessionRooms.set(sessionId, new Set())
+        }
+        this.sessionRooms.get(sessionId)!.add(userId)
+
+        // Уведомляем других игроков
+        socket.to(`session_${sessionId}`).emit('player_joined', {
+            userId,
+            username: socket.username,
+            characterId,
+            timestamp: new Date()
+        })
+
+        // Отправляем текущее состояние сессии
+        const sessionState = await this.sessionService.getSessionState(sessionId)
+        socket.emit('session_joined', {
+            sessionId,
+            state: sessionState,
+            timestamp: new Date()
+        })
+
+        console.log(`👥 User ${socket.username} joined session ${sessionId}`)
     }
 
     /**
-     * Покидание игровой сессии
+     * Обработка покидания сессии
      */
-    private async handleLeaveSession(socket: AuthenticatedSocket, sessionId: string): Promise<void> {
-        try {
-            const userId = socket.userId!
+    private async handleLeaveSession(socket: AuthenticatedSocket, data: { sessionId: string }): Promise<void> {
+        const { sessionId } = data
+        const userId = socket.userId!
 
-            // Покидаем комнату
-            await socket.leave(`session_${sessionId}`)
+        socket.leave(`session_${sessionId}`)
+        socket.currentSessionId = undefined
 
-            // Удаляем из списка участников
-            if (this.sessionRooms.has(sessionId)) {
-                this.sessionRooms.get(sessionId)!.delete(userId)
-
-                // Удаляем пустые сессии
-                if (this.sessionRooms.get(sessionId)!.size === 0) {
-                    this.sessionRooms.delete(sessionId)
-                }
+        // Удаляем из списка активных пользователей
+        if (this.sessionRooms.has(sessionId)) {
+            this.sessionRooms.get(sessionId)!.delete(userId)
+            if (this.sessionRooms.get(sessionId)!.size === 0) {
+                this.sessionRooms.delete(sessionId)
             }
-
-            // Уведомляем участников о выходе
-            socket.to(`session_${sessionId}`).emit('player_left', {
-                userId: userId,
-                username: socket.username,
-                timestamp: new Date()
-            })
-
-            socket.currentSessionId = undefined
-
-            console.log(`👋 User ${socket.username} left session ${sessionId}`)
-        } catch (error) {
-            console.error('Leave session error:', error)
         }
+
+        // Уведомляем других игроков
+        socket.to(`session_${sessionId}`).emit('player_left', {
+            userId,
+            username: socket.username,
+            timestamp: new Date()
+        })
+
+        console.log(`👋 User ${socket.username} left session ${sessionId}`)
     }
 
     /**
      * Обработка игрового действия
      */
     private async handleGameAction(socket: AuthenticatedSocket, action: GameAction): Promise<void> {
-        try {
-            const userId = socket.userId!
+        const sessionId = socket.currentSessionId
 
-            // Валидация действия
-            if (!action.sessionId || !action.content) {
-                socket.emit('error', { message: 'Некорректные данные действия' })
-                return
-            }
-
-            // Проверяем доступ к сессии
-            const hasAccess = await this.sessionService.checkUserAccess(action.sessionId, userId)
-            if (!hasAccess) {
-                socket.emit('error', { message: 'Нет доступа к данной сессии' })
-                return
-            }
-
-            // Сохраняем действие в базу данных
-            await this.sessionService.logAction({
-                sessionId: action.sessionId,
-                characterId: action.playerId,
-                actionType: action.type,
-                content: action.content,
-                metadata: action.metadata
-            })
-
-            // Рассылаем действие всем участникам сессии
-            this.io.to(`session_${action.sessionId}`).emit('game_action', {
-                ...action,
-                playerId: userId,
-                playerName: socket.username,
-                timestamp: new Date()
-            })
-
-            // Если это действие игрока, генерируем ответ ИИ мастера
-            if (action.type === 'player_action') {
-                try {
-                    const aiResponse = await this.aiMasterService.processPlayerAction({
-                        sessionId: action.sessionId,
-                        requestType: 'player_action_response',
-                        playerAction: action.content,
-                        characterId: action.playerId,
-                        additionalContext: action.metadata
-                    })
-
-                    // Отправляем ответ ИИ всем участникам
-                    this.io.to(`session_${action.sessionId}`).emit('ai_response', {
-                        responseId: aiResponse.id,
-                        content: aiResponse.content,
-                        suggestions: aiResponse.suggestions,
-                        diceRollsRequired: aiResponse.diceRollsRequired,
-                        sceneUpdates: aiResponse.sceneUpdates,
-                        timestamp: aiResponse.timestamp
-                    })
-
-                } catch (aiError) {
-                    console.error('AI Master error:', aiError)
-                    // Отправляем fallback ответ
-                    this.io.to(`session_${action.sessionId}`).emit('ai_response', {
-                        responseId: `fallback_${Date.now()}`,
-                        content: 'Мастер игры временно недоступен. Продолжайте игру!',
-                        timestamp: new Date()
-                    })
-                }
-            }
-
-            console.log(`🎯 Game action from ${socket.username} in session ${action.sessionId}: ${action.content}`)
-        } catch (error) {
-            console.error('Game action error:', error)
-            socket.emit('error', { message: 'Ошибка при обработке действия' })
+        if (!sessionId) {
+            throw new Error('Пользователь не находится в сессии')
         }
+
+        // Обрабатываем действие через ИИ мастера
+        const response = await this.aiMasterService.processPlayerAction(action)
+
+        // Отправляем результат всем участникам сессии
+        this.io.to(`session_${sessionId}`).emit('game_event', {
+            type: 'player_action_result',
+            action,
+            response,
+            timestamp: new Date()
+        })
     }
 
     /**
-     * Обработка броска кубиков
+     * Обработка броска кубика
      */
-    private async handleDiceRoll(socket: AuthenticatedSocket, diceRoll: DiceRoll): Promise<void> {
-        try {
-            const userId = socket.userId!
+    private async handleDiceRoll(socket: AuthenticatedSocket, rollData: DiceRoll): Promise<void> {
+        const sessionId = socket.currentSessionId
 
-            // Здесь можно добавить валидацию броска
-            const rollResult = {
-                ...diceRoll,
-                playerId: userId,
-                playerName: socket.username,
-                timestamp: new Date()
-            }
-
-            // Рассылаем результат броска
-            if (socket.currentSessionId) {
-                this.io.to(`session_${socket.currentSessionId}`).emit('dice_roll', rollResult)
-
-                // Сохраняем в лог действий
-                await this.sessionService.logAction({
-                    sessionId: socket.currentSessionId,
-                    characterId: diceRoll.characterId,
-                    actionType: 'dice_roll',
-                    content: `Бросок ${diceRoll.type}: ${diceRoll.result} + ${diceRoll.modifier} = ${diceRoll.total}`,
-                    metadata: { diceRoll }
-                })
-            }
-
-            console.log(`🎲 Dice roll from ${socket.username}: ${diceRoll.type} = ${diceRoll.total}`)
-        } catch (error) {
-            console.error('Dice roll error:', error)
-            socket.emit('error', { message: 'Ошибка при обработке броска' })
+        if (!sessionId) {
+            throw new Error('Пользователь не находится в сессии')
         }
+
+        // Отправляем результат броска всем участникам
+        this.io.to(`session_${sessionId}`).emit('dice_roll_result', {
+            ...rollData,
+            username: socket.username,
+            timestamp: new Date()
+        })
     }
 
     /**
-     * Обработка сообщения в чат
+     * Обработка сообщения в чате
      */
-    private async handleChatMessage(socket: AuthenticatedSocket, data: { sessionId: string, message: string, type?: 'ic' | 'ooc' }): Promise<void> {
-        try {
-            const userId = socket.userId!
+    private async handleChatMessage(socket: AuthenticatedSocket, messageData: any): Promise<void> {
+        const sessionId = socket.currentSessionId
 
-            const chatMessage = {
-                sessionId: data.sessionId,
-                playerId: userId,
-                playerName: socket.username,
-                message: data.message,
-                type: data.type || 'ooc',
-                timestamp: new Date()
-            }
-
-            // Рассылаем сообщение участникам
-            this.io.to(`session_${data.sessionId}`).emit('chat_message', chatMessage)
-
-            // Сохраняем в лог
-            await this.sessionService.logAction({
-                sessionId: data.sessionId,
-                characterId: null,
-                actionType: 'chat_message',
-                content: data.message,
-                metadata: { type: data.type }
-            })
-        } catch (error) {
-            console.error('Chat message error:', error)
-            socket.emit('error', { message: 'Ошибка при отправке сообщения' })
+        if (!sessionId) {
+            throw new Error('Пользователь не находится в сессии')
         }
+
+        // Отправляем сообщение всем участникам сессии
+        this.io.to(`session_${sessionId}`).emit('chat_message', {
+            ...messageData,
+            userId: socket.userId,
+            username: socket.username,
+            timestamp: new Date()
+        })
     }
 
     /**
-     * Обработка обновления персонажа
-     */
-    private async handleCharacterUpdate(socket: AuthenticatedSocket, data: { sessionId: string, characterId: string, updates: any }): Promise<void> {
-        try {
-            // Рассылаем обновление участникам сессии
-            socket.to(`session_${data.sessionId}`).emit('character_update', {
-                characterId: data.characterId,
-                updates: data.updates,
-                updatedBy: socket.username,
-                timestamp: new Date()
-            })
-        } catch (error) {
-            console.error('Character update error:', error)
-        }
-    }
-
-    /**
-     * Получение текущего состояния сессии
-     */
-    private async handleGetSessionState(socket: AuthenticatedSocket, sessionId: string): Promise<void> {
-        try {
-            await this.sendSessionState(socket, sessionId)
-        } catch (error) {
-            console.error('Get session state error:', error)
-            socket.emit('error', { message: 'Ошибка при получении состояния сессии' })
-        }
-    }
-
-    /**
-     * Отправка состояния сессии
-     */
-    private async sendSessionState(socket: AuthenticatedSocket, sessionId: string): Promise<void> {
-        try {
-            const sessionState = await this.sessionService.getSessionState(sessionId)
-            const connectedPlayers = Array.from(this.sessionRooms.get(sessionId) || [])
-
-            socket.emit('session_state', {
-                session: sessionState,
-                connectedPlayers: connectedPlayers,
-                timestamp: new Date()
-            })
-        } catch (error) {
-            console.error('Send session state error:', error)
-            socket.emit('error', { message: 'Ошибка при получении состояния сессии' })
-        }
-    }
-
-    /**
-     * Обработка отключения клиента
+     * Обработка отключения
      */
     private handleDisconnection(socket: AuthenticatedSocket): void {
         const userId = socket.userId!
+        const username = socket.username!
 
-        console.log(`💔 User ${socket.username} disconnected (${socket.id})`)
+        console.log(`🔌 User ${username} (${userId}) disconnected`)
 
-        // Удаляем из списка подключенных пользователей
-        this.unregisterUser(userId, socket.id)
-
-        // Покидаем текущую сессию если есть
-        if (socket.currentSessionId) {
-            this.handleLeaveSession(socket, socket.currentSessionId)
-        }
-    }
-
-    /**
-     * Регистрация пользователя
-     */
-    private registerUser(userId: string, socketId: string): void {
-        if (!this.connectedUsers.has(userId)) {
-            this.connectedUsers.set(userId, [])
-        }
-        this.connectedUsers.get(userId)!.push(socketId)
-    }
-
-    /**
-     * Отмена регистрации пользователя
-     */
-    private unregisterUser(userId: string, socketId: string): void {
+        // Удаляем сокет из списка пользователя
         if (this.connectedUsers.has(userId)) {
-            const sockets = this.connectedUsers.get(userId)!
-            const index = sockets.indexOf(socketId)
-            if (index > -1) {
-                sockets.splice(index, 1)
+            const userSockets = this.connectedUsers.get(userId)!
+            const socketIndex = userSockets.indexOf(socket.id)
+            if (socketIndex > -1) {
+                userSockets.splice(socketIndex, 1)
             }
 
-            if (sockets.length === 0) {
+            // Если у пользователя больше нет активных сокетов
+            if (userSockets.length === 0) {
                 this.connectedUsers.delete(userId)
-            }
-        }
-    }
 
-    /**
-     * Публичные методы для использования другими модулями
-     */
-
-    /**
-     * Отправка уведомления конкретному пользователю
-     */
-    public sendToUser(userId: string, event: string, data: any): void {
-        const userSockets = this.connectedUsers.get(userId)
-        if (userSockets) {
-            userSockets.forEach(socketId => {
-                this.io.to(socketId).emit(event, data)
-            })
-        }
-    }
-
-    /**
-     * Отправка уведомления всем участникам сессии
-     */
-    public sendToSession(sessionId: string, event: string, data: any): void {
-        this.io.to(`session_${sessionId}`).emit(event, data)
-    }
-
-    /**
-     * Уведомление о начале хода игрока
-     */
-    public notifyPlayerTurn(sessionId: string, playerId: string, playerName: string): void {
-        this.sendToSession(sessionId, 'player_turn', {
-            playerId,
-            playerName,
-            message: `Ход игрока ${playerName}`,
-            timestamp: new Date()
-        })
-    }
-
-    /**
-     * Уведомление об обновлении инициативы
-     */
-    public notifyInitiativeUpdate(sessionId: string, initiativeOrder: any[]): void {
-        this.sendToSession(sessionId, 'initiative_update', {
-            initiativeOrder,
-            timestamp: new Date()
-        })
-    }
-
-    /**
-     * Уведомление о начале/конце боя
-     */
-    public notifyCombatStateChange(sessionId: string, inCombat: boolean, round?: number): void {
-        this.sendToSession(sessionId, 'combat_state_change', {
-            inCombat,
-            round,
-            timestamp: new Date()
-        })
-    }
-
-    /**
-     * Уведомление об изменении сцены
-     */
-    public notifySceneChange(sessionId: string, newScene: string, description: string): void {
-        this.sendToSession(sessionId, 'scene_change', {
-            scene: newScene,
-            description,
-            timestamp: new Date()
-        })
-    }
-
-    /**
-     * Уведомление об обновлении квеста
-     */
-    public notifyQuestUpdate(sessionId: string, questUpdate: any): void {
-        this.sendToSession(sessionId, 'quest_update', {
-            ...questUpdate,
-            timestamp: new Date()
-        })
-    }
-
-    /**
-     * Массовое уведомление о событии в игре
-     */
-    public broadcastGameEvent(sessionId: string, eventType: string, eventData: any): void {
-        this.sendToSession(sessionId, 'game_event', {
-            type: eventType,
-            data: eventData,
-            timestamp: new Date()
-        })
-    }
-
-    /**
-     * Получение статистики подключений
-     */
-    public getConnectionStats(): {
-        totalConnections: number
-        activeSessions: number
-        userSessions: { [sessionId: string]: number }
-    } {
-        const userSessions: { [sessionId: string]: number } = {}
-
-        for (const [sessionId, users] of this.sessionRooms.entries()) {
-            userSessions[sessionId] = users.size
-        }
-
-        return {
-            totalConnections: this.connectedUsers.size,
-            activeSessions: this.sessionRooms.size,
-            userSessions
-        }
-    }
-
-    /**
-     * Проверка, подключен ли пользователь
-     */
-    public isUserConnected(userId: string): boolean {
-        return this.connectedUsers.has(userId)
-    }
-
-    /**
-     * Получение списка подключенных пользователей в сессии
-     */
-    public getSessionUsers(sessionId: string): string[] {
-        return Array.from(this.sessionRooms.get(sessionId) || [])
-    }
-
-    /**
-     * Принудительное отключение пользователя
-     */
-    public disconnectUser(userId: string, reason: string): void {
-        const userSockets = this.connectedUsers.get(userId)
-        if (userSockets) {
-            userSockets.forEach(socketId => {
-                const socket = this.io.sockets.sockets.get(socketId)
-                if (socket) {
-                    socket.emit('force_disconnect', { reason })
-                    socket.disconnect(true)
+                // Уведомляем о покидании сессии, если пользователь был в ней
+                if (socket.currentSessionId) {
+                    this.handleLeaveSession(socket, { sessionId: socket.currentSessionId })
                 }
-            })
-        }
-    }
-
-    /**
-     * Очистка неактивных соединений
-     */
-    public cleanupInactiveConnections(): void {
-        // Удаляем сокеты, которые больше не подключены
-        for (const [userId, socketIds] of this.connectedUsers.entries()) {
-            const activeSockets = socketIds.filter(socketId => {
-                return this.io.sockets.sockets.has(socketId)
-            })
-
-            if (activeSockets.length === 0) {
-                this.connectedUsers.delete(userId)
-            } else if (activeSockets.length !== socketIds.length) {
-                this.connectedUsers.set(userId, activeSockets)
-            }
-        }
-
-        // Очищаем пустые сессии
-        for (const [sessionId, users] of this.sessionRooms.entries()) {
-            if (users.size === 0) {
-                this.sessionRooms.delete(sessionId)
             }
         }
     }
